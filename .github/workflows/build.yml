@@ -2,7 +2,11 @@ name: APK 빌드
 
 on:
   push:
+    branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -20,10 +24,22 @@ jobs:
           gradle-version: '8.9'
 
       - name: APK 만들기
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          gradle assembleDebug --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk AlbumSorter.apk
 
-      - name: APK 업로드
+      - name: APK 업로드 (Artifacts)
         uses: actions/upload-artifact@v4
         with:
           name: AlbumSorter-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: AlbumSorter.apk
+
+      - name: 릴리스에 APK 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" AlbumSorter.apk \
+            --title "앨범 정리 (빌드 ${{ github.run_number }})" \
+            --notes "휴대폰에서 AlbumSorter.apk 를 눌러 받은 뒤 설치하세요." \
+            --latest
