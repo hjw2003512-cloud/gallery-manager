@@ -38,14 +38,17 @@ public class MainActivity extends Activity {
         return s == null ? "" : s.replaceAll("[\\\\/:*?\"<>|\\n]", "").trim();
     }
 
-    private String mediaPermission() {
+    private String[] mediaPermissions() {
         return Build.VERSION.SDK_INT >= 33
-                ? Manifest.permission.READ_MEDIA_IMAGES
-                : Manifest.permission.READ_EXTERNAL_STORAGE;
+                ? new String[]{Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO}
+                : new String[]{Manifest.permission.READ_EXTERNAL_STORAGE};
     }
 
     private boolean hasMedia() {
-        return checkSelfPermission(mediaPermission()) == PackageManager.PERMISSION_GRANTED;
+        for (String p : mediaPermissions()) {
+            if (checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED) return false;
+        }
+        return true;
     }
 
     private boolean hasNoti() {
@@ -73,12 +76,12 @@ public class MainActivity extends Activity {
         title.setTextSize(26);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         root.addView(title);
-        root.addView(text("웹사이트나 다른 앱에서 이미지를 저장하면 알림이 와요. "
+        root.addView(text("웹사이트나 다른 앱에서 사진이나 동영상을 저장하면 알림이 와요. "
                 + "알림을 눌러 앨범을 고르면 그 앨범으로 바로 옮겨집니다.", 14));
 
         // 1. 권한
         root.addView(header("1. 권한"));
-        btnMedia = button(root, v -> requestPermissions(new String[]{mediaPermission()}, REQ_MEDIA));
+        btnMedia = button(root, v -> requestPermissions(mediaPermissions(), REQ_MEDIA));
         btnNoti = button(root, v -> {
             if (Build.VERSION.SDK_INT >= 33)
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTI);
@@ -106,6 +109,11 @@ public class MainActivity extends Activity {
         shot.setChecked(Prefs.excludeScreenshots(this));
         shot.setOnCheckedChangeListener((b, c) -> Prefs.setExcludeScreenshots(this, c));
         root.addView(shot);
+        CheckBox rec = new CheckBox(this);
+        rec.setText("화면 녹화");
+        rec.setChecked(Prefs.excludeRecordings(this));
+        rec.setOnCheckedChangeListener((b, c) -> Prefs.setExcludeRecordings(this, c));
+        root.addView(rec);
 
         // 4. 내 앨범
         root.addView(header("4. 내 앨범"));
@@ -120,7 +128,7 @@ public class MainActivity extends Activity {
         root.addView(header("도움말"));
         root.addView(text("• 삼성 갤러리에서 만든 앨범은 실제로 DCIM 폴더 안의 폴더예요. 이 앱은 그 앨범으로 사진을 옮겨요.\n"
                 + "• 갤러리의 '그룹'(앨범 묶음)은 갤러리 안에서만 보이는 기능이라 목록에 나오지 않아요.\n"
-                + "• 사진 접근 권한은 꼭 '모두 허용'을 골라 주세요. '선택한 사진만'으로 하면 새 이미지를 감지하지 못해요.\n"
+                + "• 사진·동영상 권한은 꼭 '모두 허용'을 골라 주세요. '선택한 항목만'으로 하면 새 파일을 감지하지 못해요.\n"
                 + "• 알림의 '→ 앨범이름' 버튼을 누르면 마지막에 쓴 앨범으로 바로 들어가요.", 13));
 
         setContentView(scroll);
@@ -139,7 +147,7 @@ public class MainActivity extends Activity {
     }
 
     private void refresh() {
-        btnMedia.setText(hasMedia() ? "✓ 사진 접근 허용됨" : "사진 접근 허용하기 (필수)");
+        btnMedia.setText(hasMedia() ? "✓ 사진·동영상 접근 허용됨" : "사진·동영상 접근 허용하기 (필수)");
         btnMedia.setEnabled(!hasMedia());
         btnNoti.setText(hasNoti() ? "✓ 알림 허용됨" : "알림 허용하기 (필수)");
         btnNoti.setEnabled(!hasNoti());
@@ -192,7 +200,7 @@ public class MainActivity extends Activity {
             stopService(svc);
         } else {
             if (!hasMedia()) {
-                toast("먼저 사진 접근을 허용해 주세요");
+                toast("먼저 사진·동영상 접근을 허용해 주세요");
                 return;
             }
             if (!hasNoti()) toast("알림을 허용해야 앨범 선택 알림이 와요");

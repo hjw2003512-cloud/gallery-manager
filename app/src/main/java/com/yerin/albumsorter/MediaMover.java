@@ -13,6 +13,7 @@ import android.util.Log;
 
 import java.io.File;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -27,23 +28,57 @@ final class MediaMover {
 
     static final class Info {
         long id;
+        boolean video;
         String name;
         String relPath;
     }
 
     private MediaMover() {}
 
-    static Uri uriOf(long id) {
-        return ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+    /** 사진·동영상을 한꺼번에 보는 MediaStore 목록 */
+    static final Uri FILES = MediaStore.Files.getContentUri("external");
+    static final String MEDIA_SEL = MediaStore.Files.FileColumns.MEDIA_TYPE + " IN ("
+            + MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE + ","
+            + MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO + ")";
+
+    /** ID → 동영상 여부 */
+    private static final Map<Long, Boolean> videoCache = new ConcurrentHashMap<>();
+
+    static void remember(long id, int mediaType) {
+        videoCache.put(id, mediaType == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO);
+    }
+
+    static boolean isVideo(Context c, long id) {
+        Boolean v = videoCache.get(id);
+        if (v == null) {
+            try (Cursor cur = c.getContentResolver().query(FILES,
+                    new String[]{MediaStore.Files.FileColumns.MEDIA_TYPE},
+                    MediaStore.MediaColumns._ID + "=?", new String[]{String.valueOf(id)}, null)) {
+                if (cur != null && cur.moveToFirst()) {
+                    remember(id, cur.getInt(0));
+                    v = videoCache.get(id);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return v != null && v;
+    }
+
+    /** 사진이면 Images, 동영상이면 Video 주소 */
+    static Uri uriOf(Context c, long id) {
+        Uri base = isVideo(c, id) ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+        return ContentUris.withAppendedId(base, id);
     }
 
     static Info query(Context c, long id) {
         String[] proj = {MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME,
                 MediaStore.MediaColumns.RELATIVE_PATH};
-        try (Cursor cur = c.getContentResolver().query(uriOf(id), proj, null, null, null)) {
+        try (Cursor cur = c.getContentResolver().query(uriOf(c, id), proj, null, null, null)) {
             if (cur != null && cur.moveToFirst()) {
                 Info i = new Info();
                 i.id = id;
+                i.video = isVideo(c, id);
                 i.name = cur.getString(1);
                 i.relPath = AlbumRepo.normalize(cur.getString(2));
                 return i;
@@ -66,7 +101,7 @@ final class MediaMover {
         if (!newName.equals(info.name)) v.put(MediaStore.MediaColumns.DISPLAY_NAME, newName);
 
         try {
-            int n = c.getContentResolver().update(uriOf(id), v, null, null);
+            int n = c.getContentResolver().update(uriOf(c, id), v, null, null);
             if (n > 0) return Result.OK;
         } catch (SecurityException e) {
             // 다른 앱이 만든 파일 → 사용자 허락 필요 (모든 파일 접근 권한이 있으면 직접 이동)
@@ -121,7 +156,7 @@ final class MediaMover {
         }
         ContentResolver cr = c.getContentResolver();
         String sel = MediaStore.MediaColumns.RELATIVE_PATH + "=? AND " + MediaStore.MediaColumns.DISPLAY_NAME + "=?";
-        try (Cursor cur = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        try (Cursor cur = cr.query(FILES,
                 new String[]{MediaStore.MediaColumns._ID}, sel, new String[]{album, name}, null)) {
             return cur != null && cur.getCount() > 0;
         } catch (Exception e) {

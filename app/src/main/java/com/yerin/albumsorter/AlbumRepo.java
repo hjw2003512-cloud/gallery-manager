@@ -81,9 +81,10 @@ final class AlbumRepo {
         Map<String, Album> map = new LinkedHashMap<>();
         List<String> custom = Prefs.getCustomAlbums(c);
 
-        String[] proj = {MediaStore.MediaColumns._ID, MediaStore.MediaColumns.RELATIVE_PATH};
-        try (Cursor cur = c.getContentResolver().query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                proj, null, null, MediaStore.MediaColumns.DATE_ADDED + " DESC")) {
+        String[] proj = {MediaStore.MediaColumns._ID, MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStore.Files.FileColumns.MEDIA_TYPE};
+        try (Cursor cur = c.getContentResolver().query(MediaMover.FILES,
+                proj, MediaMover.MEDIA_SEL, null, MediaStore.MediaColumns.DATE_ADDED + " DESC")) {
             if (cur != null) {
                 while (cur.moveToNext()) {
                     String p = normalize(cur.getString(1));
@@ -94,7 +95,10 @@ final class AlbumRepo {
                         map.put(p, a);
                     }
                     a.count++;
-                    if (a.coverId < 0) a.coverId = cur.getLong(0);
+                    if (a.coverId < 0) {
+                        a.coverId = cur.getLong(0);
+                        MediaMover.remember(a.coverId, cur.getInt(2));
+                    }
                 }
             }
         } catch (Exception ignored) {

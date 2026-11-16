@@ -29,6 +29,9 @@ final class Prefs {
     static boolean excludeScreenshots(Context c) { return sp(c).getBoolean("ex_shot", true); }
     static void setExcludeScreenshots(Context c, boolean v) { sp(c).edit().putBoolean("ex_shot", v).apply(); }
 
+    static boolean excludeRecordings(Context c) { return sp(c).getBoolean("ex_rec", false); }
+    static void setExcludeRecordings(Context c, boolean v) { sp(c).edit().putBoolean("ex_rec", v).apply(); }
+
     static boolean showOthers(Context c) { return sp(c).getBoolean("show_others", false); }
     static void setShowOthers(Context c, boolean v) { sp(c).edit().putBoolean("show_others", v).apply(); }
 

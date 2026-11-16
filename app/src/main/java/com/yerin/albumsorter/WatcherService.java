@@ -91,6 +91,8 @@ public class WatcherService extends Service {
         };
         getContentResolver().registerContentObserver(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer);
+        getContentResolver().registerContentObserver(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI, true, observer);
         handler.post(scanTask);
     }
 
@@ -130,17 +132,19 @@ public class WatcherService extends Service {
                 MediaStore.MediaColumns._ID,
                 MediaStore.MediaColumns.DISPLAY_NAME,
                 MediaStore.MediaColumns.RELATIVE_PATH,
+                MediaStore.Files.FileColumns.MEDIA_TYPE,
         };
 
         // 처음 켰을 때: 기존 사진에는 알림을 보내지 않도록 기준점만 저장
         if (last < 0) {
             long max = 0;
-            try (Cursor c = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, proj,
-                    MediaStore.MediaColumns.DATE_ADDED + ">?", new String[]{String.valueOf(since)}, null)) {
+            try (Cursor c = cr.query(MediaMover.FILES, proj,
+                    "(" + MediaMover.MEDIA_SEL + ") AND " + MediaStore.MediaColumns.DATE_ADDED + ">?",
+                    new String[]{String.valueOf(since)}, null)) {
                 if (c != null) while (c.moveToNext()) seenList.add(String.valueOf(c.getLong(0)));
             }
-            try (Cursor c = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    new String[]{MediaStore.MediaColumns._ID}, null, null,
+            try (Cursor c = cr.query(MediaMover.FILES,
+                    new String[]{MediaStore.MediaColumns._ID}, MediaMover.MEDIA_SEL, null,
                     MediaStore.MediaColumns._ID + " DESC")) {
                 if (c != null && c.moveToFirst()) max = c.getLong(0);
             }
@@ -149,21 +153,26 @@ public class WatcherService extends Service {
             return;
         }
 
-        String sel = MediaStore.MediaColumns._ID + ">? OR " + MediaStore.MediaColumns.DATE_ADDED + ">?";
+        String sel = "(" + MediaMover.MEDIA_SEL + ") AND (" + MediaStore.MediaColumns._ID + ">? OR "
+                + MediaStore.MediaColumns.DATE_ADDED + ">?)";
         String[] args = {String.valueOf(last), String.valueOf(since)};
         long max = last;
         boolean exCam = Prefs.excludeCamera(this);
         boolean exShot = Prefs.excludeScreenshots(this);
+        boolean exRec = Prefs.excludeRecordings(this);
         List<String> custom = Prefs.getCustomAlbums(this);
         File root = Environment.getExternalStorageDirectory();
 
-        try (Cursor c = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, proj, sel, args,
+        try (Cursor c = cr.query(MediaMover.FILES, proj, sel, args,
                 MediaStore.MediaColumns._ID + " ASC")) {
             if (c == null) return;
             while (c.moveToNext()) {
                 long id = c.getLong(0);
                 String name = c.getString(1);
                 String rel = AlbumRepo.normalize(c.getString(2));
+                int type = c.getInt(3);
+                MediaMover.remember(id, type);
+                boolean video = type == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO;
                 if (id > max) max = id;
                 String key = String.valueOf(id);
                 if (seen.contains(key)) continue;
@@ -174,19 +183,21 @@ public class WatcherService extends Service {
                 String full = new File(root, rel + (name == null ? "" : name)).getAbsolutePath();
                 if (MediaMover.ignorePaths.remove(full)) continue;           // 이 앱이 옮긴 파일
                 if (exCam && rel.startsWith("DCIM/Camera")) continue;          // 카메라 사진
-                if (exShot && rel.toLowerCase(Locale.ROOT).contains("screenshot")) continue; // 스크린샷
+                String low = rel.toLowerCase(Locale.ROOT);
+                if (exShot && low.contains("screenshot")) continue;                 // 스크린샷
+                if (exRec && (low.contains("screen record") || low.contains("screenrecord"))) continue; // 화면 녹화
                 if (custom.contains(rel)) continue;
                 if (rel.equals(AlbumRepo.SECURE_PENDING)) continue;                            // 이미 내 앨범에 저장됨
 
-                showNotification(id, name, rel);
+                showNotification(id, name, rel, video);
             }
         }
         Prefs.setLastId(this, max);
         Prefs.setSeen(this, seenList);
     }
 
-    private void showNotification(long id, String name, String rel) {
-        Uri uri = MediaMover.uriOf(id);
+    private void showNotification(long id, String name, String rel, boolean video) {
+        Uri uri = MediaMover.uriOf(this, id);
         Bitmap thumb = null;
         try {
             thumb = getContentResolver().loadThumbnail(uri, new Size(512, 512), null);
@@ -205,7 +216,7 @@ public class WatcherService extends Service {
 
         Notification.Builder b = new Notification.Builder(this, CH_NEW)
                 .setSmallIcon(R.drawable.ic_notify)
-                .setContentTitle("새 이미지 · 어느 앨범에 넣을까요?")
+                .setContentTitle((video ? "🎬 새 동영상" : "새 이미지") + " · 어느 앨범에 넣을까요?")
                 .setContentText(AlbumRepo.displayName(rel) + " 폴더에 저장됨 · " + name)
                 .setContentIntent(pPick)
                 .setAutoCancel(true)

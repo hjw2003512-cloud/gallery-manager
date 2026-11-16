@@ -207,7 +207,7 @@ public class PickerActivity extends Activity {
             MediaMover.Info info = MediaMover.query(this, imageId);
             Bitmap thumb = null;
             try {
-                thumb = getContentResolver().loadThumbnail(MediaMover.uriOf(imageId), new Size(300, 300), null);
+                thumb = getContentResolver().loadThumbnail(MediaMover.uriOf(this, imageId), new Size(300, 300), null);
             } catch (Exception ignored) {
             }
             List<AlbumRepo.Album> list = AlbumRepo.load(this, showOthers);
@@ -223,7 +223,8 @@ public class PickerActivity extends Activity {
                 }
                 currentPath = info.relPath;
                 if (finalThumb != null) thumbView.setImageBitmap(finalThumb);
-                infoView.setText("지금 위치: " + AlbumRepo.displayName(info.relPath) + "\n" + info.name);
+                infoView.setText((info.video ? "🎬 동영상 · " : "") + "지금 위치: "
+                        + AlbumRepo.displayName(info.relPath) + "\n" + info.name);
                 recent = rec;
                 albums.clear();
                 for (AlbumRepo.Album a : list) if (!a.path.equals(currentPath)) albums.add(a);
@@ -290,7 +291,7 @@ public class PickerActivity extends Activity {
                     pool.execute(() -> {
                         Bitmap bmp = null;
                         try {
-                            bmp = getContentResolver().loadThumbnail(MediaMover.uriOf(cid), new Size(256, 256), null);
+                            bmp = getContentResolver().loadThumbnail(MediaMover.uriOf(PickerActivity.this, cid), new Size(256, 256), null);
                         } catch (Exception ignored) {
                         }
                         if (bmp == null) return;
@@ -397,7 +398,7 @@ public class PickerActivity extends Activity {
                 pendingAlbum = album;
                 try {
                     PendingIntent pi = MediaStore.createWriteRequest(getContentResolver(),
-                            Collections.singletonList(MediaMover.uriOf(imageId)));
+                            Collections.singletonList(MediaMover.uriOf(this, imageId)));
                     startIntentSenderForResult(pi.getIntentSender(), REQ_WRITE, null, 0, 0, 0);
                 } catch (Exception e) {
                     toast("수정 허용 창을 열지 못했어요");
