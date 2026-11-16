@@ -32,6 +32,9 @@ final class Prefs {
     static boolean showOthers(Context c) { return sp(c).getBoolean("show_others", false); }
     static void setShowOthers(Context c, boolean v) { sp(c).edit().putBoolean("show_others", v).apply(); }
 
+    static boolean secureGuideSeen(Context c) { return sp(c).getBoolean("secure_guide", false); }
+    static void setSecureGuideSeen(Context c) { sp(c).edit().putBoolean("secure_guide", true).apply(); }
+
     // ----- 내가 만든 앨범 -----
     static List<String> getCustomAlbums(Context c) { return split(sp(c).getString("custom_albums", "")); }
 

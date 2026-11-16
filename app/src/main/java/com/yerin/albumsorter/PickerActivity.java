@@ -38,6 +38,7 @@ import java.util.concurrent.Executors;
 /** 알림을 누르면 뜨는 "앨범 고르기" 창 (갤러리 앨범 화면처럼 커버·이름·사진 수 표시) */
 public class PickerActivity extends Activity {
     private static final int REQ_WRITE = 7;
+    private static final String SAMSUNG_GALLERY = "com.sec.android.gallery3d";
 
     private long imageId;
     private boolean autoMode;
@@ -164,7 +165,16 @@ public class PickerActivity extends Activity {
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
-        buttons.setGravity(Gravity.END);
+        buttons.setGravity(Gravity.CENTER_VERTICAL);
+        if (hasSamsungGallery()) {
+            Button secure = new Button(this);
+            secure.setText("🔒 보안 폴더로");
+            secure.setAllCaps(false);
+            secure.setOnClickListener(v -> openForSecureFolder());
+            buttons.addView(secure);
+        }
+        View spacer = new View(this);
+        buttons.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
         Button add = new Button(this);
         add.setText("+ 새 앨범");
         add.setOnClickListener(v -> askNewAlbum());
@@ -294,6 +304,56 @@ public class PickerActivity extends Activity {
             }
             return cell;
         }
+    }
+
+    private boolean hasSamsungGallery() {
+        try {
+            getPackageManager().getPackageInfo(SAMSUNG_GALLERY, 0);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 삼성 갤러리에서 이 사진을 열어, 사용자가 "보안 폴더로 이동"을 누를 수 있게 함 */
+    private void openForSecureFolder() {
+        if (!Prefs.secureGuideSeen(this)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("보안 폴더로 보내기")
+                    .setMessage("삼성 보안 폴더는 다른 앱이 직접 넣을 수 없게 막혀 있어요.\n\n"
+                            + "갤러리에서 이 사진이 열리면\n"
+                            + "오른쪽 아래 ⋮ (더보기) → '보안 폴더로 이동'을 눌러 주세요.")
+                    .setPositiveButton("갤러리 열기", (d, w) -> {
+                        Prefs.setSecureGuideSeen(this);
+                        launchGallery();
+                    })
+                    .setNegativeButton("취소", null)
+                    .show();
+        } else {
+            launchGallery();
+        }
+    }
+
+    private void launchGallery() {
+        Intent i = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(MediaMover.uriOf(imageId), "image/*")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)
+                .setPackage(SAMSUNG_GALLERY);
+        try {
+            startActivity(i);
+        } catch (Exception e) {
+            i.setPackage(null);
+            try {
+                startActivity(i);
+            } catch (Exception e2) {
+                toast("갤러리를 열 수 없어요");
+                return;
+            }
+        }
+        Toast.makeText(getApplicationContext(), "⋮ 더보기 → '보안 폴더로 이동'을 눌러 주세요",
+                Toast.LENGTH_LONG).show();
+        cancelNotification();
+        finish();
     }
 
     private void askNewAlbum() {
