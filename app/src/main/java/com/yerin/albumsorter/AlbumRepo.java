@@ -30,6 +30,10 @@ final class AlbumRepo {
         long coverId = -1;  // 가장 최근 사진 ID
     }
 
+    /** 보안 폴더로 보내기 전에 잠시 모아두는 앨범 */
+    static final String SECURE_PENDING_NAME = "보안폴더 대기";
+    static final String SECURE_PENDING = "DCIM/" + SECURE_PENDING_NAME + "/";
+
     /** 갤러리가 자동으로 만드는 폴더 (내 앨범이 아님) */
     private static final Set<String> SYSTEM_DIRS = new HashSet<>(Arrays.asList(
             "camera", "screenshots", "screen recordings", "screenrecorder", "screenrecords",
@@ -123,6 +127,7 @@ final class AlbumRepo {
 
         List<Album> out = new ArrayList<>();
         for (Album a : map.values()) {
+            if (a.path.equals(SECURE_PENDING)) continue;
             if (includeOthers || isUserAlbum(a.path, custom)) out.add(a);
         }
 

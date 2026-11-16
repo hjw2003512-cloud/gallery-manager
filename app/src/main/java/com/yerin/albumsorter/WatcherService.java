@@ -175,7 +175,8 @@ public class WatcherService extends Service {
                 if (MediaMover.ignorePaths.remove(full)) continue;           // 이 앱이 옮긴 파일
                 if (exCam && rel.startsWith("DCIM/Camera")) continue;          // 카메라 사진
                 if (exShot && rel.toLowerCase(Locale.ROOT).contains("screenshot")) continue; // 스크린샷
-                if (custom.contains(rel)) continue;                            // 이미 내 앨범에 저장됨
+                if (custom.contains(rel)) continue;
+                if (rel.equals(AlbumRepo.SECURE_PENDING)) continue;                            // 이미 내 앨범에 저장됨
 
                 showNotification(id, name, rel);
             }

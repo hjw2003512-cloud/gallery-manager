@@ -45,6 +45,7 @@ public class PickerActivity extends Activity {
     private String pendingAlbum;
     private boolean consentTried;
     private String currentPath;
+    private boolean secureMode;
 
     private final List<AlbumRepo.Album> albums = new ArrayList<>();
     private List<String> recent = new ArrayList<>();
@@ -311,49 +312,45 @@ public class PickerActivity extends Activity {
             getPackageManager().getPackageInfo(SAMSUNG_GALLERY, 0);
             return true;
         } catch (Exception e) {
-            return false;
+            return "samsung".equalsIgnoreCase(android.os.Build.MANUFACTURER);
         }
     }
 
-    /** 삼성 갤러리에서 이 사진을 열어, 사용자가 "보안 폴더로 이동"을 누를 수 있게 함 */
+    /** 보안 폴더로 보내기: "보안폴더 대기" 앨범으로 옮긴 뒤 갤러리를 일반 모드로 열기 */
     private void openForSecureFolder() {
         if (!Prefs.secureGuideSeen(this)) {
             new AlertDialog.Builder(this)
                     .setTitle("보안 폴더로 보내기")
-                    .setMessage("삼성 보안 폴더는 다른 앱이 직접 넣을 수 없게 막혀 있어요.\n\n"
-                            + "갤러리에서 이 사진이 열리면\n"
-                            + "오른쪽 아래 ⋮ (더보기) → '보안 폴더로 이동'을 눌러 주세요.")
-                    .setPositiveButton("갤러리 열기", (d, w) -> {
+                    .setMessage("삼성 보안 폴더는 다른 앱이 직접 넣을 수 없어서, 이렇게 진행돼요.\n\n"
+                            + "① 이 사진을 '" + AlbumRepo.SECURE_PENDING_NAME + "' 앨범으로 옮겨요.\n"
+                            + "② 갤러리가 열리면 앨범 탭 → '" + AlbumRepo.SECURE_PENDING_NAME + "' 앨범을 여세요.\n"
+                            + "③ 사진을 길게 눌러 선택(여러 장이면 '전체') → ⋮ 더보기 → '보안 폴더로 이동'.")
+                    .setPositiveButton("진행", (d, w) -> {
                         Prefs.setSecureGuideSeen(this);
-                        launchGallery();
+                        secureMode = true;
+                        doMove(AlbumRepo.SECURE_PENDING);
                     })
                     .setNegativeButton("취소", null)
                     .show();
         } else {
-            launchGallery();
+            secureMode = true;
+            doMove(AlbumRepo.SECURE_PENDING);
         }
     }
 
-    private void launchGallery() {
-        Intent i = new Intent(Intent.ACTION_VIEW)
-                .setDataAndType(MediaMover.uriOf(imageId), "image/*")
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK)
-                .setPackage(SAMSUNG_GALLERY);
-        try {
-            startActivity(i);
-        } catch (Exception e) {
-            i.setPackage(null);
+    /** 갤러리 앱을 처음 화면(일반 모드)으로 열기 — 이렇게 열어야 '보안 폴더로 이동' 메뉴가 다 나옴 */
+    private void launchGalleryHome() {
+        Intent i = getPackageManager().getLaunchIntentForPackage(SAMSUNG_GALLERY);
+        if (i != null) {
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             try {
                 startActivity(i);
-            } catch (Exception e2) {
-                toast("갤러리를 열 수 없어요");
-                return;
+            } catch (Exception ignored) {
             }
         }
-        Toast.makeText(getApplicationContext(), "⋮ 더보기 → '보안 폴더로 이동'을 눌러 주세요",
+        Toast.makeText(getApplicationContext(),
+                "앨범 탭 → '" + AlbumRepo.SECURE_PENDING_NAME + "' → 사진 길게 누르기 → ⋮ → 보안 폴더로 이동",
                 Toast.LENGTH_LONG).show();
-        cancelNotification();
-        finish();
     }
 
     private void askNewAlbum() {
@@ -381,9 +378,13 @@ public class PickerActivity extends Activity {
         MediaMover.Result r = MediaMover.move(this, imageId, album);
         switch (r) {
             case OK:
-                Prefs.pushRecent(this, album);
                 cancelNotification();
-                toast("「" + AlbumRepo.displayName(album) + "」 앨범에 넣었어요");
+                if (secureMode) {
+                    launchGalleryHome();
+                } else {
+                    Prefs.pushRecent(this, album);
+                    toast("「" + AlbumRepo.displayName(album) + "」 앨범에 넣었어요");
+                }
                 finish();
                 break;
             case NEED_CONSENT:
@@ -409,6 +410,7 @@ public class PickerActivity extends Activity {
                 finish();
                 break;
             default:
+                secureMode = false;
                 toast("옮기지 못했어요. 다른 앨범을 골라 보세요");
                 if (autoMode) finish();
         }
@@ -422,6 +424,7 @@ public class PickerActivity extends Activity {
             doMove(pendingAlbum);
         } else {
             consentTried = false;
+            secureMode = false;
             toast("허용하지 않아서 옮기지 않았어요");
             if (autoMode) finish();
         }
