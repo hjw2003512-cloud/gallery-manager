@@ -29,6 +29,9 @@ final class Prefs {
     static boolean excludeScreenshots(Context c) { return sp(c).getBoolean("ex_shot", true); }
     static void setExcludeScreenshots(Context c, boolean v) { sp(c).edit().putBoolean("ex_shot", v).apply(); }
 
+    static boolean showOthers(Context c) { return sp(c).getBoolean("show_others", false); }
+    static void setShowOthers(Context c, boolean v) { sp(c).edit().putBoolean("show_others", v).apply(); }
+
     // ----- 내가 만든 앨범 -----
     static List<String> getCustomAlbums(Context c) { return split(sp(c).getString("custom_albums", "")); }
 

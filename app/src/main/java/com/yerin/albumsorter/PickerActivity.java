@@ -4,28 +4,38 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.text.InputType;
+import android.text.TextUtils;
+import android.util.LruCache;
+import android.util.Size;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
+import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.GridView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-/** 알림을 누르면 뜨는 "앨범 고르기" 창 */
+/** 알림을 누르면 뜨는 "앨범 고르기" 창 (갤러리 앨범 화면처럼 커버·이름·사진 수 표시) */
 public class PickerActivity extends Activity {
     private static final int REQ_WRITE = 7;
 
@@ -33,12 +43,28 @@ public class PickerActivity extends Activity {
     private boolean autoMode;
     private String pendingAlbum;
     private boolean consentTried;
+    private String currentPath;
 
-    private final List<String> albums = new ArrayList<>();
+    private final List<AlbumRepo.Album> albums = new ArrayList<>();
     private List<String> recent = new ArrayList<>();
-    private ArrayAdapter<String> adapter;
+    private AlbumAdapter adapter;
     private ImageView thumbView;
-    private TextView infoView;
+    private TextView infoView, emptyView;
+
+    private final ExecutorService pool = Executors.newFixedThreadPool(3);
+    private final LruCache<Long, Bitmap> cache = new LruCache<>(80);
+
+    /** 정사각형 이미지뷰 (앨범 커버용) */
+    static class SquareImageView extends ImageView {
+        SquareImageView(Context c) { super(c); }
+
+        @Override
+        protected void onMeasure(int w, int h) {
+            super.onMeasure(w, w);
+            int size = getMeasuredWidth();
+            setMeasuredDimension(size, size);
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,6 +88,12 @@ public class PickerActivity extends Activity {
         load();
     }
 
+    @Override
+    protected void onDestroy() {
+        pool.shutdownNow();
+        super.onDestroy();
+    }
+
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
     }
@@ -69,43 +101,66 @@ public class PickerActivity extends Activity {
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(20), dp(20), dp(12));
+        root.setPadding(dp(16), dp(18), dp(16), dp(10));
 
-        TextView title = new TextView(this);
-        title.setText("어느 앨범에 넣을까요?");
-        title.setTextSize(20);
-        root.addView(title);
-
+        // 저장된 이미지 미리보기
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
         thumbView = new ImageView(this);
         thumbView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(150));
-        tp.topMargin = dp(12);
-        root.addView(thumbView, tp);
-
+        thumbView.setBackground(rounded(0xFFE8EAF0, 10));
+        thumbView.setClipToOutline(true);
+        top.addView(thumbView, new LinearLayout.LayoutParams(dp(64), dp(64)));
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        texts.setPadding(dp(12), 0, 0, 0);
+        TextView title = new TextView(this);
+        title.setText("어느 앨범에 넣을까요?");
+        title.setTextSize(19);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        texts.addView(title);
         infoView = new TextView(this);
-        infoView.setTextSize(13);
-        infoView.setPadding(0, dp(6), 0, dp(6));
-        root.addView(infoView);
+        infoView.setTextSize(12);
+        infoView.setTextColor(0xFF666A73);
+        infoView.setMaxLines(2);
+        infoView.setEllipsize(TextUtils.TruncateAt.END);
+        texts.addView(infoView);
+        top.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(top);
 
-        ListView list = new ListView(this);
-        adapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_2,
-                android.R.id.text1, albums) {
-            @Override
-            public View getView(int position, View convertView, ViewGroup parent) {
-                View v = super.getView(position, convertView, parent);
-                String p = getItem(position);
-                TextView t1 = v.findViewById(android.R.id.text1);
-                TextView t2 = v.findViewById(android.R.id.text2);
-                t1.setText("📁  " + AlbumRepo.displayName(p));
-                t2.setText(p + (recent.contains(p) ? "  · 최근 사용" : ""));
-                return v;
-            }
-        };
-        list.setAdapter(adapter);
-        list.setOnItemClickListener((parent, view, position, id) -> doMove(albums.get(position)));
-        root.addView(list, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        CheckBox others = new CheckBox(this);
+        others.setText("다른 앱 폴더도 보기 (인스타그램, 카카오톡 등)");
+        others.setTextSize(13);
+        others.setChecked(Prefs.showOthers(this));
+        others.setOnCheckedChangeListener((b, c) -> {
+            Prefs.setShowOthers(this, c);
+            load();
+        });
+        LinearLayout.LayoutParams op = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        op.topMargin = dp(8);
+        root.addView(others, op);
+
+        emptyView = new TextView(this);
+        emptyView.setText("갤러리에서 만든 앨범이 없어요.\n아래 '+ 새 앨범'으로 만들거나, '다른 앱 폴더도 보기'를 켜 보세요.");
+        emptyView.setTextSize(13);
+        emptyView.setGravity(Gravity.CENTER);
+        emptyView.setPadding(0, dp(30), 0, dp(30));
+        emptyView.setVisibility(View.GONE);
+        root.addView(emptyView);
+
+        GridView grid = new GridView(this);
+        grid.setNumColumns(3);
+        grid.setHorizontalSpacing(dp(10));
+        grid.setVerticalSpacing(dp(14));
+        grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
+        grid.setPadding(0, dp(8), 0, dp(8));
+        grid.setClipToPadding(false);
+        adapter = new AlbumAdapter();
+        grid.setAdapter(adapter);
+        grid.setOnItemClickListener((parent, view, position, id) -> doMove(albums.get(position).path));
+        root.addView(grid, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -125,37 +180,120 @@ public class PickerActivity extends Activity {
 
         setContentView(root);
         getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
-                (int) (getResources().getDisplayMetrics().heightPixels * 0.85));
+                (int) (getResources().getDisplayMetrics().heightPixels * 0.88));
+    }
+
+    private GradientDrawable rounded(int color, int radiusDp) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(radiusDp));
+        return g;
     }
 
     private void load() {
-        new Thread(() -> {
+        boolean showOthers = Prefs.showOthers(this);
+        pool.execute(() -> {
             MediaMover.Info info = MediaMover.query(this, imageId);
             Bitmap thumb = null;
             try {
-                thumb = getContentResolver().loadThumbnail(MediaMover.uriOf(imageId),
-                        new android.util.Size(600, 600), null);
+                thumb = getContentResolver().loadThumbnail(MediaMover.uriOf(imageId), new Size(300, 300), null);
             } catch (Exception ignored) {
             }
-            List<String> list = AlbumRepo.listAlbums(this);
+            List<AlbumRepo.Album> list = AlbumRepo.load(this, showOthers);
             List<String> rec = Prefs.getRecent(this);
             Bitmap finalThumb = thumb;
             runOnUiThread(() -> {
+                if (isFinishing()) return;
                 if (info == null) {
                     toast("이미지를 찾을 수 없어요 (이미 옮겨졌거나 삭제됨)");
                     cancelNotification();
                     finish();
                     return;
                 }
+                currentPath = info.relPath;
                 if (finalThumb != null) thumbView.setImageBitmap(finalThumb);
-                infoView.setText("현재 위치: " + info.relPath + "\n파일: " + info.name);
-                list.remove(info.relPath);
+                infoView.setText("지금 위치: " + AlbumRepo.displayName(info.relPath) + "\n" + info.name);
                 recent = rec;
                 albums.clear();
-                albums.addAll(list);
+                for (AlbumRepo.Album a : list) if (!a.path.equals(currentPath)) albums.add(a);
+                emptyView.setVisibility(albums.isEmpty() ? View.VISIBLE : View.GONE);
                 adapter.notifyDataSetChanged();
             });
-        }).start();
+        });
+    }
+
+    private class AlbumAdapter extends BaseAdapter {
+        @Override public int getCount() { return albums.size(); }
+        @Override public Object getItem(int i) { return albums.get(i); }
+        @Override public long getItemId(int i) { return i; }
+
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
+            LinearLayout cell;
+            SquareImageView cover;
+            TextView name, count;
+            if (convertView == null) {
+                cell = new LinearLayout(PickerActivity.this);
+                cell.setOrientation(LinearLayout.VERTICAL);
+                cover = new SquareImageView(PickerActivity.this);
+                cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                cover.setBackground(rounded(0xFFE8EAF0, 12));
+                cover.setClipToOutline(true);
+                cell.addView(cover, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                name = new TextView(PickerActivity.this);
+                name.setTextSize(14);
+                name.setTextColor(Color.BLACK);
+                name.setSingleLine(true);
+                name.setEllipsize(TextUtils.TruncateAt.END);
+                name.setPadding(dp(2), dp(5), dp(2), 0);
+                cell.addView(name);
+                count = new TextView(PickerActivity.this);
+                count.setTextSize(12);
+                count.setTextColor(0xFF7A7F88);
+                count.setPadding(dp(2), 0, dp(2), 0);
+                cell.addView(count);
+                cell.setTag(new View[]{cover, name, count});
+            } else {
+                cell = (LinearLayout) convertView;
+                View[] v = (View[]) cell.getTag();
+                cover = (SquareImageView) v[0];
+                name = (TextView) v[1];
+                count = (TextView) v[2];
+            }
+
+            AlbumRepo.Album a = albums.get(position);
+            name.setText(a.name);
+            String c = a.count > 0 ? a.count + "장" : "비어 있음";
+            if (recent.contains(a.path)) c = "최근 · " + c;
+            count.setText(c);
+
+            cover.setTag(a.coverId);
+            cover.setImageDrawable(null);
+            if (a.coverId >= 0) {
+                Bitmap b = cache.get(a.coverId);
+                if (b != null) {
+                    cover.setImageBitmap(b);
+                } else {
+                    long cid = a.coverId;
+                    pool.execute(() -> {
+                        Bitmap bmp = null;
+                        try {
+                            bmp = getContentResolver().loadThumbnail(MediaMover.uriOf(cid), new Size(256, 256), null);
+                        } catch (Exception ignored) {
+                        }
+                        if (bmp == null) return;
+                        cache.put(cid, bmp);
+                        Bitmap fb = bmp;
+                        runOnUiThread(() -> {
+                            Object tag = cover.getTag();
+                            if (tag instanceof Long && (Long) tag == cid) cover.setImageBitmap(fb);
+                        });
+                    });
+                }
+            }
+            return cell;
+        }
     }
 
     private void askNewAlbum() {
@@ -165,7 +303,7 @@ public class PickerActivity extends Activity {
         et.setSingleLine(true);
         new AlertDialog.Builder(this)
                 .setTitle("새 앨범 만들기")
-                .setMessage("Pictures 폴더 안에 새 앨범이 만들어져요")
+                .setMessage("갤러리 앨범과 같은 위치(DCIM)에 만들어져요")
                 .setView(et)
                 .setPositiveButton("만들고 넣기", (d, w) -> {
                     String n = MainActivity.sanitize(et.getText().toString());
@@ -173,9 +311,7 @@ public class PickerActivity extends Activity {
                         toast("앨범 이름을 입력해 주세요");
                         return;
                     }
-                    String path = "Pictures/" + n + "/";
-                    Prefs.addCustomAlbum(this, path);
-                    doMove(path);
+                    doMove(AlbumRepo.createAlbum(this, n));
                 })
                 .setNegativeButton("취소", null)
                 .show();

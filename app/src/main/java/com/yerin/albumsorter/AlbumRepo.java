@@ -1,22 +1,43 @@
 package com.yerin.albumsorter;
 
-import android.content.ContentResolver;
 import android.content.Context;
 import android.database.Cursor;
+import android.os.Environment;
 import android.provider.MediaStore;
 
+import java.io.File;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.TreeSet;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
-/** 갤러리 앨범(= Pictures / DCIM 아래 폴더) 목록 */
+/**
+ * 갤러리 앨범 목록.
+ * 삼성 갤러리에서 "앨범 만들기"로 만든 앨범은 실제로 DCIM/앨범이름 폴더예요.
+ * 그래서 기본 목록은 DCIM 아래 폴더(카메라·스크린샷 제외) + 이 앱에서 만든 앨범입니다.
+ */
 final class AlbumRepo {
     private AlbumRepo() {}
 
-    /** 이미지를 넣을 수 있는 폴더인지 (안드로이드는 이미지를 Pictures/ 또는 DCIM/ 아래에만 둘 수 있음) */
+    static final class Album {
+        String path;        // 예: "DCIM/여행/"
+        String name;        // 예: "여행"
+        int count;
+        long coverId = -1;  // 가장 최근 사진 ID
+    }
+
+    /** 갤러리가 자동으로 만드는 폴더 (내 앨범이 아님) */
+    private static final Set<String> SYSTEM_DIRS = new HashSet<>(Arrays.asList(
+            "camera", "screenshots", "screen recordings", "screenrecorder", "screenrecords",
+            "100andro", "restored", "videocaptures", "video captures"));
+
     static boolean isValidAlbum(String p) {
-        return p != null && (p.startsWith("Pictures/") || p.startsWith("DCIM/"));
+        return p != null && (p.startsWith("Pictures/") || p.startsWith("DCIM/"))
+                && !p.equals("Pictures/") && !p.equals("DCIM/");
     }
 
     static String normalize(String p) {
@@ -24,42 +45,115 @@ final class AlbumRepo {
         return p.endsWith("/") ? p : p + "/";
     }
 
-    /** "Pictures/여행/" → "여행" */
+    /** "DCIM/여행/" → "여행" */
     static String displayName(String path) {
         if (path == null) return "?";
         String s = path.endsWith("/") ? path.substring(0, path.length() - 1) : path;
         int i = s.lastIndexOf('/');
-        return i >= 0 ? s.substring(i + 1) : s;
+        String n = i >= 0 ? s.substring(i + 1) : s;
+        switch (n.toLowerCase(Locale.ROOT)) {
+            case "camera": return "카메라";
+            case "screenshots": return "스크린샷";
+            case "download": return "다운로드";
+            default: return n;
+        }
     }
 
-    /** 최근 사용 앨범을 먼저, 나머지는 이름순 */
-    static List<String> listAlbums(Context c) {
-        LinkedHashSet<String> result = new LinkedHashSet<>();
-        for (String r : Prefs.getRecent(c)) {
-            if (isValidAlbum(r)) result.add(r);
-        }
+    /** 갤러리에서 사용자가 만든 앨범인지 */
+    static boolean isUserAlbum(String path, List<String> custom) {
+        if (path == null) return false;
+        if (custom.contains(path)) return true;
+        if (!path.startsWith("DCIM/") || path.equals("DCIM/")) return false;
+        String[] parts = path.substring(5).split("/");
+        if (parts.length == 0 || parts[0].isEmpty()) return false;
+        for (String s : parts) if (s.startsWith(".")) return false;
+        return !SYSTEM_DIRS.contains(parts[0].toLowerCase(Locale.ROOT));
+    }
 
-        TreeSet<String> others = new TreeSet<>((a, b) ->
-                displayName(a).compareToIgnoreCase(displayName(b)) != 0
-                        ? displayName(a).compareToIgnoreCase(displayName(b))
-                        : a.compareTo(b));
-        for (String a : Prefs.getCustomAlbums(c)) {
-            if (isValidAlbum(a)) others.add(a);
-        }
+    /**
+     * @param includeOthers true면 Pictures 아래 다른 앱 폴더(인스타그램, 카카오톡 등)도 포함
+     */
+    static List<Album> load(Context c, boolean includeOthers) {
+        Map<String, Album> map = new LinkedHashMap<>();
+        List<String> custom = Prefs.getCustomAlbums(c);
 
-        ContentResolver cr = c.getContentResolver();
-        String[] proj = {MediaStore.MediaColumns.RELATIVE_PATH};
-        try (Cursor cur = cr.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, proj, null, null, null)) {
+        String[] proj = {MediaStore.MediaColumns._ID, MediaStore.MediaColumns.RELATIVE_PATH};
+        try (Cursor cur = c.getContentResolver().query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                proj, null, null, MediaStore.MediaColumns.DATE_ADDED + " DESC")) {
             if (cur != null) {
                 while (cur.moveToNext()) {
-                    String p = normalize(cur.getString(0));
-                    if (isValidAlbum(p) && !p.equals("Pictures/") && !p.equals("DCIM/")) others.add(p);
+                    String p = normalize(cur.getString(1));
+                    if (!isValidAlbum(p)) continue;
+                    Album a = map.get(p);
+                    if (a == null) {
+                        a = newAlbum(p);
+                        map.put(p, a);
+                    }
+                    a.count++;
+                    if (a.coverId < 0) a.coverId = cur.getLong(0);
                 }
             }
         } catch (Exception ignored) {
         }
 
-        result.addAll(others);
-        return new ArrayList<>(result);
+        // 사진이 아직 없는 빈 앨범(폴더)도 찾기: DCIM 아래 2단계까지
+        try {
+            File dcim = new File(Environment.getExternalStorageDirectory(), "DCIM");
+            File[] lv1 = dcim.listFiles();
+            if (lv1 != null) {
+                for (File d : lv1) {
+                    if (!d.isDirectory() || d.getName().startsWith(".")) continue;
+                    String p = "DCIM/" + d.getName() + "/";
+                    if (!map.containsKey(p)) map.put(p, newAlbum(p));
+                    File[] lv2 = d.listFiles();
+                    if (lv2 == null) continue;
+                    for (File d2 : lv2) {
+                        if (!d2.isDirectory() || d2.getName().startsWith(".")) continue;
+                        String p2 = p + d2.getName() + "/";
+                        if (!map.containsKey(p2)) map.put(p2, newAlbum(p2));
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        for (String p : custom) {
+            if (isValidAlbum(p) && !map.containsKey(p)) map.put(p, newAlbum(p));
+        }
+
+        List<Album> out = new ArrayList<>();
+        for (Album a : map.values()) {
+            if (includeOthers || isUserAlbum(a.path, custom)) out.add(a);
+        }
+
+        List<String> recent = Prefs.getRecent(c);
+        out.sort((x, y) -> {
+            int rx = recent.indexOf(x.path), ry = recent.indexOf(y.path);
+            if (rx < 0) rx = Integer.MAX_VALUE;
+            if (ry < 0) ry = Integer.MAX_VALUE;
+            if (rx != ry) return Integer.compare(rx, ry);
+            boolean ux = isUserAlbum(x.path, custom), uy = isUserAlbum(y.path, custom);
+            if (ux != uy) return ux ? -1 : 1;
+            return x.name.compareToIgnoreCase(y.name);
+        });
+        return out;
+    }
+
+    /** 갤러리와 같은 방식으로 DCIM 아래에 새 앨범 만들기. 만든 경로를 돌려줌 */
+    static String createAlbum(Context c, String name) {
+        String path = "DCIM/" + name + "/";
+        try {
+            new File(Environment.getExternalStorageDirectory(), path).mkdirs();
+        } catch (Exception ignored) {
+        }
+        Prefs.addCustomAlbum(c, path);
+        return path;
+    }
+
+    private static Album newAlbum(String p) {
+        Album a = new Album();
+        a.path = p;
+        a.name = displayName(p);
+        return a;
     }
 }

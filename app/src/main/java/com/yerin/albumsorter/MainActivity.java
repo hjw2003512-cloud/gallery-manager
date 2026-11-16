@@ -109,8 +109,8 @@ public class MainActivity extends Activity {
 
         // 4. 내 앨범
         root.addView(header("4. 내 앨범"));
-        root.addView(text("여기서 만든 앨범은 갤러리에 사진이 없어도 선택 목록에 나와요. "
-                + "갤러리에 이미 있는 앨범(폴더)은 자동으로 목록에 나옵니다.", 12));
+        root.addView(text("갤러리에서 직접 만든 앨범이 알림의 앨범 선택 화면에 나와요. "
+                + "여기서 만든 앨범도 갤러리 앨범과 같은 위치(DCIM)에 만들어집니다.", 12));
         albumBox = new LinearLayout(this);
         albumBox.setOrientation(LinearLayout.VERTICAL);
         root.addView(albumBox);
@@ -118,7 +118,8 @@ public class MainActivity extends Activity {
         add.setText("+ 앨범 만들기");
 
         root.addView(header("도움말"));
-        root.addView(text("• 앨범은 휴대폰의 Pictures 폴더 안에 있는 폴더예요. 삼성 갤러리와 구글 포토의 '기기 폴더'에 바로 보여요.\n"
+        root.addView(text("• 삼성 갤러리에서 만든 앨범은 실제로 DCIM 폴더 안의 폴더예요. 이 앱은 그 앨범으로 사진을 옮겨요.\n"
+                + "• 갤러리의 '그룹'(앨범 묶음)은 갤러리 안에서만 보이는 기능이라 목록에 나오지 않아요.\n"
                 + "• 사진 접근 권한은 꼭 '모두 허용'을 골라 주세요. '선택한 사진만'으로 하면 새 이미지를 감지하지 못해요.\n"
                 + "• 알림의 '→ 앨범이름' 버튼을 누르면 마지막에 쓴 앨범으로 바로 들어가요.", 13));
 
@@ -153,26 +154,35 @@ public class MainActivity extends Activity {
         status.setText(on ? "● 켜짐 — 새 이미지를 지켜보는 중" : "○ 꺼짐");
         btnToggle.setText(on ? "감시 끄기" : "감시 시작하기");
 
-        albumBox.removeAllViews();
-        List<String> custom = Prefs.getCustomAlbums(this);
-        if (custom.isEmpty()) {
-            albumBox.addView(text("(아직 없음)", 13));
-        }
-        for (String p : custom) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            TextView t = text("📁  " + AlbumRepo.displayName(p) + "   (" + p + ")", 15);
-            row.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            Button del = new Button(this);
-            del.setText("목록에서 빼기");
-            del.setOnClickListener(v -> {
-                Prefs.removeCustomAlbum(this, p);
-                refresh();
+        loadAlbums();
+    }
+
+    private void loadAlbums() {
+        new Thread(() -> {
+            List<AlbumRepo.Album> list = AlbumRepo.load(this, false);
+            List<String> custom = Prefs.getCustomAlbums(this);
+            runOnUiThread(() -> {
+                albumBox.removeAllViews();
+                if (list.isEmpty()) albumBox.addView(text("(아직 없음)", 13));
+                for (AlbumRepo.Album a : list) {
+                    LinearLayout row = new LinearLayout(this);
+                    row.setOrientation(LinearLayout.HORIZONTAL);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    TextView t = text("📁  " + a.name + "   " + (a.count > 0 ? a.count + "장" : "비어 있음"), 15);
+                    row.addView(t, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                    if (custom.contains(a.path) && a.count == 0) {
+                        Button del = new Button(this);
+                        del.setText("목록에서 빼기");
+                        del.setOnClickListener(v -> {
+                            Prefs.removeCustomAlbum(this, a.path);
+                            refresh();
+                        });
+                        row.addView(del);
+                    }
+                    albumBox.addView(row);
+                }
             });
-            row.addView(del);
-            albumBox.addView(row);
-        }
+        }).start();
     }
 
     private void toggle() {
@@ -221,7 +231,7 @@ public class MainActivity extends Activity {
         et.setSingleLine(true);
         new AlertDialog.Builder(this)
                 .setTitle("새 앨범 만들기")
-                .setMessage("Pictures 폴더 안에 만들어져요")
+                .setMessage("갤러리 앨범과 같은 위치(DCIM)에 만들어져요")
                 .setView(et)
                 .setPositiveButton("만들기", (d, w) -> {
                     String n = sanitize(et.getText().toString());
@@ -229,7 +239,7 @@ public class MainActivity extends Activity {
                         toast("앨범 이름을 입력해 주세요");
                         return;
                     }
-                    Prefs.addCustomAlbum(this, "Pictures/" + n + "/");
+                    AlbumRepo.createAlbum(this, n);
                     refresh();
                 })
                 .setNegativeButton("취소", null)
